@@ -11,10 +11,10 @@ use tokio_tungstenite::{accept_async, tungstenite::Error};
 use tungstenite::{Message, Result};
 use futures_channel::mpsc::{unbounded, UnboundedSender};
 
-use uid::Id as IdT;
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-struct T(());
-type Id = IdT<T>;
+// Private module
+mod protocol;
+use crate::protocol::*;
+mod othello;
 
 type Tx = UnboundedSender<Message>;
 #[derive(Clone, Debug)]
@@ -54,8 +54,8 @@ async fn handle_connection(peer_map: PeerMap, addr: SocketAddr, stream: TcpStrea
     let mut internal_fut = rx.next();
     loop {
         match select(ws_fut, internal_fut).await {
-            Either::Left((msg, internal_fut_continue)) => {
-                match msg {
+            Either::Left((ws_msg, internal_fut_continue)) => {
+                match ws_msg {
                     Some(msg) => {
                         let msg = msg?;
                         if msg.is_text() || msg.is_binary() {
@@ -78,8 +78,8 @@ async fn handle_connection(peer_map: PeerMap, addr: SocketAddr, stream: TcpStrea
                     None => break, // WebSocket stream terminated.
                 };
             }
-            Either::Right((msg, ws_fut_continue)) => {
-                match msg {
+            Either::Right((internal_msg, ws_fut_continue)) => {
+                match internal_msg {
                     Some(msg) => {
                         ws_sender.send(msg).await?;
                         ws_fut = ws_fut_continue; // Continue receiving the WebSocket message.
@@ -98,7 +98,7 @@ async fn handle_connection(peer_map: PeerMap, addr: SocketAddr, stream: TcpStrea
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    simple_logger::init_with_level(log::Level::Debug).unwrap();
 
     let context = PeerMap::new(Mutex::new(HashMap::new()));
 

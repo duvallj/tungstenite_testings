@@ -13,6 +13,7 @@ tokio = { version = "*", features = ["full"] }
 futures = "*"
 futures-util = "*"
 futures-channel = "*"
-uid = "*"
-log = "*"
-env_logger = "*"
+uid = "0.1"
+log = "0.4"
+simple_logger = "1.6"
+serde = {version = "1.0", features = ["derive"]}
