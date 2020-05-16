@@ -12,7 +12,7 @@ impl Serialize for BoardStruct {
         // String implements FromIterator<char>, str does not
         let st : String = self.board
             .iter()
-            .map(piece_to_char)
+            .map(|p: &Piece| -> char { p.into() })
             .collect();
         serializer.serialize_str(st.as_str())
     }
@@ -37,7 +37,7 @@ impl<'de> Visitor<'de> for BoardVisitor {
 
         let pcs : Vec<Piece> = value
             .chars()
-            .map(char_to_piece)
+            .map(|c: char| c.into())
             .collect();
         if pcs.len() != 100 {
             return Err(E::custom(format!("something went wonky; board is not length 100 somewhere")));
