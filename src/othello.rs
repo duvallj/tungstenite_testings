@@ -85,6 +85,7 @@ impl Direction {
 }
 
 pub type Board = [Piece; 100];
+
 fn initial_board () -> Board {
     let mut board = [Piece::OUTER; 100];
     for x in 1..9 {
@@ -118,6 +119,12 @@ Piece::OUTER, Piece::OUTER, Piece::OUTER, Piece::OUTER, Piece::OUTER, Piece::OUT
 #[derive(Copy, Clone)]
 pub struct BoardStruct {
     board: Board,
+}
+// whyy
+impl std::fmt::Debug for BoardStruct {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&&self.board[..], f)
+    }
 }
 
 mod serialization;

@@ -1,39 +1,54 @@
 use serde::{Serialize, Deserialize};
+use std::collections::HashMap;
 
-use uid::Id as IdT;
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub struct ClientIdType(());
-pub type Id = IdT<ClientIdType>;
+use snowflake::ProcessUniqueId;
+// re-export
+pub type Id = ProcessUniqueId;
 
 // private module
 use crate::othello::*;
 
-#[derive(Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum ServerMessage {
-    BoardUpdate {},
-    MoveRequest {},
-    GameEnd {},
-    GameError {},
+pub struct Room {
+    id: Id,
+    black_name: String,
+    white_name: String,
+    timelimit: f32,
+    watching: Vec<Id>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExternalRoom {
+    black: String,
+    white: String,
+    timelimit: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ServerMessage {
+    #[serde(rename = "list_reply")]
+    ListReply {room_list: HashMap<Id, ExternalRoom>},
+    #[serde(rename = "board_update")]
+    BoardUpdate {board: BoardStruct, tomove: Player, black: String, white: String},
+    #[serde(rename = "move_request")]
+    MoveRequest {},
+    #[serde(rename = "game_end")]
+    GameEnd {board: BoardStruct, winner: Player, forfeit: bool},
+    #[serde(rename = "game_error")]
+    GameError {error: String},
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ClientMessage {
     #[serde(rename = "list_request")]
     ListRequest {},
     #[serde(rename = "play_request")]
-    PlayRequest {},
+    PlayRequest {black: String, white: String, t: f32},
     #[serde(rename = "watch_request")]
-    WatchRequest {},
+    WatchRequest {watching: Id},
     #[serde(rename = "movereply")]
-    MoveReply {},
+    MoveReply {square: usize},
     #[serde(rename = "disconnect")]
     Disconnect {},
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum Message {
-    Server(ServerMessage),
-    Client(ClientMessage),
 }
