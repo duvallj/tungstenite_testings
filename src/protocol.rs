@@ -1,10 +1,9 @@
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 
-use snowflake::ProcessUniqueId;
+use uuid::Uuid;
 // re-export
-pub type Id = ProcessUniqueId;
-
+pub type Id = Uuid;
 // private module
 use crate::othello::*;
 
@@ -38,17 +37,31 @@ pub enum ServerMessage {
     GameError {error: String},
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PlayRequest {black: String, white: String, t: f32}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WatchRequest {watching: Id}
+
+// TODO: potentially have optional fields on this, make into another enum?
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ListRequest {}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ClientRequest {
+    Play(PlayRequest),
+    Watch(WatchRequest),
+    List(ListRequest),
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ClientMessage {
-    #[serde(rename = "list_request")]
-    ListRequest {},
-    #[serde(rename = "play_request")]
-    PlayRequest {black: String, white: String, t: f32},
-    #[serde(rename = "watch_request")]
-    WatchRequest {watching: Id},
     #[serde(rename = "movereply")]
     MoveReply {square: usize},
     #[serde(rename = "disconnect")]
     Disconnect {},
 }
+
+pub mod urls;

@@ -4,15 +4,34 @@ use std::{
     sync::{Arc, Mutex},
     env,
 };
-use futures_util::future::{select, Either};
-use futures_util::{sink::Sink, SinkExt, StreamExt};
+use futures_util::future::{
+    select,
+    Either
+};
+use futures_util::{
+    sink::Sink,
+    SinkExt,
+    StreamExt
+};
 use log::*;
-use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::{accept_async, tungstenite::Error};
-use tungstenite::{Message as WSMessage, Result as WSResult, error::Error as WSError};
+use tokio::net::{
+    TcpListener,
+    TcpStream
+};
+use tokio_tungstenite::{
+    accept_hdr_async,
+    tungstenite::Error,
+};
+use tungstenite::{
+    Message as WSMessage,
+    Result as WSResult,
+    error::Error as WSError,
+};
 use futures_channel::mpsc::{unbounded, UnboundedSender};
-use serde_json::Result as SerdeResult;
-use serde_json::error::Error as SerdeError;
+use serde_json::{
+    Result as SerdeResult,
+    error::Error as SerdeError
+};
 
 // Private modules
 mod othello;
@@ -32,17 +51,43 @@ async fn accept_connection(peer_map: PeerMap, addr: SocketAddr, stream: TcpStrea
     if let Err(e) = handle_connection(peer_map, addr, stream).await {
         match e {
             Error::ConnectionClosed | Error::Protocol(_) | Error::Utf8 => (),
-            err => error!("Error processing connection: {}", err),
+            err => error!("Error processing connection: {:?}", err),
         }
     }
 }
 
 async fn handle_connection(peer_map: PeerMap, addr: SocketAddr, stream: TcpStream) -> WSResult<()> {
-    let ws_stream = accept_async(stream).await.expect("Failed to accept");
-    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
+    let mut request_type: Option<ClientRequest> = None;
+
+    let ws_stream = accept_hdr_async(
+        stream,
+        |request: &http::Request<()>, response: http::Response<()>| {
+            match protocol::urls::parse_uri(request.uri().clone()) {
+                Ok(rq) => {
+                    request_type = Some(rq);
+
+                    Ok(response)
+                },
+                Err(why) => {
+                    let err_msg = format!("Error parsing request: {}", why);
+                    error!("{}", &err_msg);
+
+                    let (mut parts, _) = response.into_parts();
+                    parts.status = http::StatusCode::BAD_REQUEST;
+                    Err(http::Response::from_parts(parts, Some(err_msg)))
+                }
+            }
+        }
+    ).await;
+
+    if let Err(why) = ws_stream {
+        return Err(why);
+    }
+
+    let (mut ws_sender, mut ws_receiver) = ws_stream?.split();
 
     let (mut tx, mut rx) = unbounded();
-    let my_id = Id::new(); // guaranteed to be unique
+    let my_id = Id::new_v4(); // guaranteed to be unique
     let data = ConnectionData {
         addr: addr,
         tx: tx.clone()
@@ -116,19 +161,6 @@ async fn handle_incoming_message(
     client_msg: ClientMessage,
 ) {
     match client_msg {
-        ClientMessage::ListRequest {} => {
-            // TODO: figure out how/where to store a list of
-            // currently running games
-            info!("list_request from {}", room_id);
-        },
-        ClientMessage::PlayRequest {black, white, t} => {
-            // TODO: actually start a game running somewhere when this is received
-            info!("play_request for {} vs {} ({}) from {}", black, white, t, room_id);
-        },
-        ClientMessage::WatchRequest {watching} => {
-            // TODO: actually hook up things so that it watches the game
-            info!("watch_request to watch {} from {}", watching, room_id);
-        },
         ClientMessage::MoveReply {square} => {
             // TODO: you know the drill
             info!("move_reply on square {} from {}", square, room_id);
