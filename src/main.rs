@@ -47,8 +47,8 @@ struct ConnectionData {
 
 type PeerMap = Arc<Mutex<HashMap<Id, ConnectionData>>>;
 
-async fn accept_connection(peer_map: PeerMap, addr: SocketAddr, stream: TcpStream) {
-    if let Err(e) = handle_connection(peer_map, addr, stream).await {
+async fn accept_connection(peer_map: PeerMap, room_map: RoomMap, addr: SocketAddr, stream: TcpStream) {
+    if let Err(e) = handle_connection(peer_map, room_map, addr, stream).await {
         match e {
             Error::ConnectionClosed | Error::Protocol(_) | Error::Utf8 => (),
             err => error!("Error processing connection: {:?}", err),
@@ -56,7 +56,7 @@ async fn accept_connection(peer_map: PeerMap, addr: SocketAddr, stream: TcpStrea
     }
 }
 
-async fn handle_connection(peer_map: PeerMap, addr: SocketAddr, stream: TcpStream) -> WSResult<()> {
+async fn handle_connection(peer_map: PeerMap, room_map: RoomMap, addr: SocketAddr, stream: TcpStream) -> WSResult<()> {
     let mut request_type: Option<ClientRequest> = None;
 
     let ws_stream = accept_hdr_async(
@@ -78,13 +78,9 @@ async fn handle_connection(peer_map: PeerMap, addr: SocketAddr, stream: TcpStrea
                 }
             }
         }
-    ).await;
+    ).await?;
 
-    if let Err(why) = ws_stream {
-        return Err(why);
-    }
-
-    let (mut ws_sender, mut ws_receiver) = ws_stream?.split();
+    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
     let (mut tx, mut rx) = unbounded();
     let my_id = Id::new_v4(); // guaranteed to be unique
@@ -95,6 +91,8 @@ async fn handle_connection(peer_map: PeerMap, addr: SocketAddr, stream: TcpStrea
     // put data into shared context
     peer_map.lock().unwrap().insert(my_id, data);
     info!("New WebSocket connection {} assigned id {}", &addr, &my_id);
+    handle_initial_request(&my_id, &room_map, &mut ws_sender, request_type).await;
+
 
     let mut ws_fut = ws_receiver.next();
     let mut internal_fut = rx.next();
@@ -108,7 +106,7 @@ async fn handle_connection(peer_map: PeerMap, addr: SocketAddr, stream: TcpStrea
                         if msg.is_text() {
                             // Attempt to decode message as json w/ Serde
                             let client_msg = unwrap_incomming_message(msg)?;
-                            handle_incoming_message(&peer_map, &my_id, &mut tx, client_msg).await;
+                            handle_incoming_message(&my_id, &room_map, client_msg).await;
                             // If we receive a message, send it to all our peers
                             /* let peers = peer_map.lock().unwrap();
                             let broadcast_recipients = peers
@@ -142,6 +140,7 @@ async fn handle_connection(peer_map: PeerMap, addr: SocketAddr, stream: TcpStrea
     }
 
     // Remove id from map b/c it is no longer valid
+    cleanup_room(&my_id, &room_map);
     peer_map.lock().unwrap().remove(&my_id);
     Ok(())
 }
@@ -154,47 +153,14 @@ fn unwrap_incomming_message(msg: WSMessage) -> WSResult<ClientMessage> {
         Err(error) => Err(WSError::Io(error.into())),
     }
 }
-async fn handle_incoming_message(
-    peer_map: &PeerMap, 
-    room_id: &Id, 
-    tx: &mut Tx,
-    client_msg: ClientMessage,
-) {
-    match client_msg {
-        ClientMessage::MoveReply {square} => {
-            // TODO: you know the drill
-            info!("move_reply on square {} from {}", square, room_id);
-        },
-        ClientMessage::Disconnect {} => {
-            info!("disconnect signaled from {}", room_id);
-        },
-    }
-}
 
-async fn send_outgoing_message<T: SinkExt<WSMessage> + std::marker::Unpin>(
-    ws_sender: &mut T,
-    msg: ServerMessage,
-) {
-    // stupid explicit error handling everywhere!
-    match serde_json::to_string(&msg) {
-        Err(why) => {
-            error!("Error serializing message {:?}: {}", msg, why);
-            // Stupid error types everywhere
-            // FIXME: once i find more about "associated types"
-        },
-        Ok(server_msg) => {
-            // FIXME: explicitly handle errors here
-            info!("Sending out message {}", &server_msg);
-            ws_sender.send(WSMessage::Text(server_msg)).await;
-        }
-    }
-}
 
 #[tokio::main]
 async fn main() {
     simple_logger::init_with_level(log::Level::Debug).unwrap();
 
     let context = PeerMap::new(Mutex::new(HashMap::new()));
+    let rooms = RoomMap::new(Mutex::new(HashMap::new()));
 
     let addr = env::args()
         .nth(1)
@@ -208,6 +174,6 @@ async fn main() {
             .expect("connected streams should have a peer address");
         info!("Peer address: {}", peer);
 
-        tokio::spawn(accept_connection(context.clone(), peer, stream));
+        tokio::spawn(accept_connection(context.clone(), rooms.clone(), peer, stream));
     }
 }
