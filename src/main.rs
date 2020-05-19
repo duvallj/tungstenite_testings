@@ -36,6 +36,7 @@ use serde_json::{
 // Private modules
 mod othello;
 mod protocol;
+mod runner;
 use crate::protocol::*;
 
 type Tx = UnboundedSender<ServerMessage>;

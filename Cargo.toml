@@ -1,21 +1,25 @@
 [package]
 name = "tungstenite_testings"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["me"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio-tungstenite = "*"
-tungstenite = "*"
-http = "*"
-tokio = { version = "*", features = ["full"] }
-futures = "*"
-futures-util = "*"
-futures-channel = "*"
+# For websocket stuff
+tokio-tungstenite = "0.10"
+tungstenite = "0.10"
+http = "0.2"
+# For general async support
+tokio = { version = "0.2", features = ["full"] }
+futures = "0.3"
+futures-util = "0.3"
+futures-channel = "0.3"
+# For logging
 log = "0.4"
 simple_logger = "1.6"
+# For data serialization
 serde = {version = "1.0", features = ["derive"]}
 serde_json = "1.0"
 serde_urlencoded = "0.6"
