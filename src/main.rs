@@ -4,16 +4,16 @@ use std::{
     sync::{Arc, Mutex},
     env,
 };
-use futures_util::future::{
-    select,
-    Either
-};
 use futures_util::{
     sink::Sink,
     SinkExt,
     StreamExt
 };
 use log::*;
+use serde_json::{
+    Result as SerdeResult,
+    error::Error as SerdeError
+};
 use tokio::net::{
     TcpListener,
     TcpStream
@@ -27,11 +27,6 @@ use tungstenite::{
     Result as WSResult,
     error::Error as WSError,
 };
-use futures_channel::mpsc::{unbounded, UnboundedSender};
-use serde_json::{
-    Result as SerdeResult,
-    error::Error as SerdeError
-};
 
 // Private modules
 mod othello;
@@ -39,25 +34,16 @@ mod protocol;
 mod runner;
 use crate::protocol::*;
 
-type Tx = UnboundedSender<ServerMessage>;
-#[derive(Clone, Debug)]
-struct ConnectionData {
-    addr: SocketAddr,
-    tx: Tx,
-}
-
-type PeerMap = Arc<Mutex<HashMap<Id, ConnectionData>>>;
-
-async fn accept_connection(peer_map: PeerMap, room_map: RoomMap, addr: SocketAddr, stream: TcpStream) {
-    if let Err(e) = handle_connection(peer_map, room_map, addr, stream).await {
+async fn accept_connection(room_map: RoomMap, addr: SocketAddr, stream: TcpStream) {
+    if let Err(e) = handle_connection(room_map, addr, stream).await {
         match e {
-            Error::ConnectionClosed | Error::Protocol(_) | Error::Utf8 => (),
+            Error::ConnectionClosed | Error::AlreadyClosed => (),
             err => error!("Error processing connection: {:?}", err),
         }
     }
 }
 
-async fn handle_connection(peer_map: PeerMap, room_map: RoomMap, addr: SocketAddr, stream: TcpStream) -> WSResult<()> {
+async fn handle_connection(room_map: RoomMap, addr: SocketAddr, stream: TcpStream) -> WSResult<()> {
     let mut request_type: Option<ClientRequest> = None;
 
     let ws_stream = accept_hdr_async(
@@ -71,7 +57,8 @@ async fn handle_connection(peer_map: PeerMap, room_map: RoomMap, addr: SocketAdd
                 },
                 Err(why) => {
                     let err_msg = format!("Error parsing request: {}", why);
-                    error!("{}", &err_msg);
+                    // This error gets turned into type Error::Protocol, is logged later
+                    // error!("{}", &err_msg);
 
                     let (mut parts, _) = response.into_parts();
                     parts.status = http::StatusCode::BAD_REQUEST;
@@ -81,10 +68,21 @@ async fn handle_connection(peer_map: PeerMap, room_map: RoomMap, addr: SocketAdd
         }
     ).await?;
 
-    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
-
-    let (mut tx, mut rx) = unbounded();
-    let my_id = Id::new_v4(); // guaranteed to be unique
+    match request_type {
+        Some(ClientRequest::Play(prq)) => {
+            protocol::actions::play(prq, room_map, ws_stream)
+        },
+        Some(ClientRequest::Watch(wrq)) => {
+            protocol::actions::watch(wrq, room_map, ws_stream)
+        },
+        Some(ClientRequest::List(lrq)) => {
+            protocol::actions::list(lrq, room_map, ws_stream)
+        },
+        None => {
+            // TODO: error somehow b/c this shouldn't be possible
+            Err(Error::Protocol("Something went wrong; failed to parse request type but fell through anyways"))
+        }
+    }
     let data = ConnectionData {
         addr: addr,
         tx: tx.clone()
@@ -92,8 +90,8 @@ async fn handle_connection(peer_map: PeerMap, room_map: RoomMap, addr: SocketAdd
     // put data into shared context
     peer_map.lock().unwrap().insert(my_id, data);
     info!("New WebSocket connection {} assigned id {}", &addr, &my_id);
-    handle_initial_request(&my_id, &room_map, &mut ws_sender, request_type).await;
-
+    handle_initial_request(&my_id, &room_map, &mut ws_sender, &request_type).await;
+    
 
     let mut ws_fut = ws_receiver.next();
     let mut internal_fut = rx.next();

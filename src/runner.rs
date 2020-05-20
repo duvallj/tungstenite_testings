@@ -14,17 +14,16 @@ use tokio::io::{
     ErrorKind as IOErrorKind,
 };
 
-// Private module
+pub mod structs;
+use structs::*;
 mod settings;
 
-pub type RunnerStdin = BufWriter<ChildStdin>;
-pub type RunnerStdout = Lines<BufReader<ChildStdout>>;
-pub type RunnerStderr = Lines<BufReader<ChildStderr>>;
+use crate::protocol::*;
 
 pub fn make_runner(ai_name: &String) -> IOResult<(Child, RunnerStdin, RunnerStdout, RunnerStderr)> {
     let mut command = settings::build_jailed_command(ai_name)?;
-    let child = command.spawn()?;
-    match (&child.stdin, &child.stdout, &child.stderr) {
+    let mut child = command.spawn()?;
+    match (child.stdin.take(), child.stdout.take(), child.stderr.take()) {
         (None, _, _) => {
             Err(IOError::new(IOErrorKind::BrokenPipe, "Could not open stdin on subprocess!"))
         },
@@ -35,7 +34,13 @@ pub fn make_runner(ai_name: &String) -> IOResult<(Child, RunnerStdin, RunnerStdo
             Err(IOError::new(IOErrorKind::BrokenPipe, "Could not open stderr on subprocess!"))
         },
         (Some(stdin), Some(stdout), Some(stderr)) => {
-            Ok((child, BufWriter::new(*stdin), BufReader::new(*stdout).lines(), BufReader::new(*stderr).lines()))
+            Ok((child, stdin, BufReader::new(stdout).lines(), BufReader::new(stderr).lines()))
         }
     }
+}
+
+pub async fn get_move(runner: &Runner) -> IOResult<usize> {
+    // TODO: implement the functionality to send a move to the runner
+    // and await its result
+    Ok(0)
 }

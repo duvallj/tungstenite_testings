@@ -31,3 +31,15 @@ impl PlayRequest {
         }
     }
 }
+
+impl From<WatchRequest> for Id {
+    fn from(wrq: WatchRequest) -> Self {
+        wrq.watching
+    }
+}
+
+impl From<&WatchRequest> for Id {
+    fn from(wrq: &WatchRequest) -> Self {
+        wrq.watching.clone()
+    }
+}
