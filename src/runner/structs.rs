@@ -1,4 +1,3 @@
-use serde::{Serialize, Deserialize};
 use tokio::process::{
     Child,
     ChildStdin,
@@ -9,8 +8,6 @@ use tokio::io::{
     BufReader,
     Lines,
 };
-
-use crate::othello::*;
 
 pub type RunnerStdin = ChildStdin;
 pub type RunnerStdout = Lines<BufReader<ChildStdout>>;
@@ -23,4 +20,3 @@ pub struct Runner {
     pub stderr: RunnerStderr,
     pub ai_name: String,
 }
-

@@ -68,9 +68,8 @@ pub async fn send_outgoing_message<T: Sink<WSMessage, Error = WSError> + SinkExt
     match serde_json::to_string(&msg) {
         Err(why) => {
             error!("Error serializing message {:?}: {}", msg, why);
-            // Stupid error types everywhere
-            // FIXME: actually error once i find more about "associated types"
-            Ok(())
+            // error types everywhere
+            Err(WSError::Io(why.into()))
         },
         Ok(server_msg) => {
             info!("Sending out message {}", &server_msg);
