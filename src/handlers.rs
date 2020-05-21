@@ -1,6 +1,10 @@
 // Functions that actually handle the protocol
-use futures_channel::mpsc::unbounded;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use futures_channel::mpsc::{unbounded, UnboundedSender};
 use futures_util::{
+    sink::Sink,
+    stream::Stream,
     SinkExt,
     StreamExt,
     future::{
@@ -14,6 +18,7 @@ use tokio::io::{
     AsyncRead,
     AsyncWrite,
 };
+use tokio_tungstenite::WebSocketStream;
 use tungstenite::{
     Message as WSMessage,
     Result as WSResult,
@@ -22,6 +27,21 @@ use tungstenite::{
 
 use crate::protocol::*;
 use crate::runner::*;
+use crate::othello::BoardStruct;
+
+type Tx = UnboundedSender<ServerMessage>;
+pub type PeerMap = Arc<Mutex<HashMap<Id, Tx>>>;
+
+pub enum PlayerType {
+    Human,
+    Ai(Runner),
+}
+
+pub struct Game {
+    black: PlayerType,
+    white: PlayerType,
+    board: BoardStruct,
+}
 
 pub async fn handle_incoming_message(
     id: &Id,
@@ -39,10 +59,11 @@ pub async fn handle_incoming_message(
     }
 }
 
-pub async fn send_outgoing_message<T: SinkExt<WSMessage> + Unpin>(
+pub async fn send_outgoing_message<T: Sink<WSMessage, Error = WSError> + SinkExt<WSMessage> + Unpin>(
     ws_sender: &mut T,
     msg: ServerMessage,
-) -> WSResult<()> {
+) -> WSResult<()> 
+{
     // explicit error handling everywhere!
     match serde_json::to_string(&msg) {
         Err(why) => {
@@ -59,45 +80,64 @@ pub async fn send_outgoing_message<T: SinkExt<WSMessage> + Unpin>(
 }
 
 
-// I need to do this instead of impl some trait for each of the request
-// structs because Rust doesn't support async fns in traits yet :(
-pub async fn play<T: AsyncRead + AsyncWrite + Unpin>(
-    prq: PlayRequest
-    pper_map: PeerMap,
+// I need to do this "multiple functions" thing instead of impl some trait for 
+// each of the request structs because Rust doesn't support async fns in traits
+// yet :(
+//
+// Also, associated type is whack b/c I can't directly use WebSocketStream ???
+pub async fn play<T: Sink<WSMessage, Error=WSError> + SinkExt<WSMessage> + Stream<Item=WSResult<WSMessage>> + StreamExt<Item=WSResult<WSMessage>> + Unpin>(
+    prq: PlayRequest,
     room_map: RoomMap,
-    ws_stream: WebSocketStream<T>,
+    peer_map: PeerMap,
+    mut ws_stream: T,
 ) -> WSResult<()> {
     let my_id = Id::new_v4(); // guaranteed to be unique
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
     // room_map is for Ids that are currently playing games
     room_map.lock().unwrap()
-        .insert(&my_id, prq.to_room(&my_id);
+        .insert(my_id.clone(), prq.to_room(&my_id));
     // peer_map is for Ids that are watching and expect to receive and mirror messages
     // As we are playing, we don't insert ourselves into it
 
     let mut ws_fut = ws_receiver.next();
     
     loop {
-
+        break;
     }
     Ok(())
 }
 
-pub async fn watch<T: AsyncRead + AsyncWrite + Unpin>(
+pub async fn watch<T: Sink<WSMessage, Error=WSError> + SinkExt<WSMessage> + Stream<Item=WSResult<WSMessage>> + StreamExt<Item=WSResult<WSMessage>> + Unpin>(
     wrq: WatchRequest,
-    peer_map: PeerMap,
     room_map: RoomMap,
-    ws_stream: WebSocketStream<T>,
+    peer_map: PeerMap,
+    mut ws_stream: T,
 ) -> WSResult<()> {
+    let my_id = Id::new_v4(); // guaranteed to be unique
+    // New scope so we don't keep holding on to lock
+    {
+        let mut rooms = room_map.lock().unwrap();
+        let watch_id : Id = wrq.into();
+
+        match rooms.get_mut(&watch_id) {
+            Some(room) => {
+                room.watching.push(my_id.clone());
+            },
+            None => {
+                // TODO: error somehow
+                warn!("Client {} tried to watch non-existent room {}!", my_id, watch_id);
+            },
+        };
+    }
     Ok(())
 }
 
 
-pub async fn list<T: AsyncRead + AsyncWrite + Unpin>(
+pub async fn list<T: Sink<WSMessage, Error=WSError> + SinkExt<WSMessage> + Stream<Item=WSResult<WSMessage>> + StreamExt<Item=WSResult<WSMessage>> + Unpin>(
     _lrq: ListRequest,
     room_map: RoomMap,
-    ws_stream: WebSocketStream<T>,
+    mut ws_stream: T,
 ) -> WSResult<()> {
     let simplified_map : HashMap<Id, ExternalRoom> = 
         room_map.lock().unwrap()
@@ -123,25 +163,8 @@ pub async fn handle_initial_request<T: SinkExt<WSMessage> + std::marker::Unpin>(
         Some(ClientRequest::List(lrq)) => {
         },
         Some(ClientRequest::Play(prq)) => {
-            let mut rooms = room_map.lock().unwrap();
-            // TODO: check for case where room already exists (somehow) and end it
-            rooms.insert(
-                id.clone(),
-                prq.to_room(id)
-            );
         },
         Some(ClientRequest::Watch(wrq)) => {
-            let mut rooms = room_map.lock().unwrap();
-            
-            match rooms.get_mut(wrq.watching) {
-                Some(room) => {
-                    room.watching.push(id.clone());
-                },
-                None => {
-                    // TODO: error somehow
-                    warn!("Client {} tried to watch non-existent room {}!", id, wrq.watching);
-                },
-            };
         }
         _ => {}
     }

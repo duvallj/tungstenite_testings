@@ -1,17 +1,11 @@
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::{Mutex},
     env,
-};
-use futures_util::{
-    sink::Sink,
-    SinkExt,
-    StreamExt
 };
 use log::*;
 use serde_json::{
-    Result as SerdeResult,
     error::Error as SerdeError
 };
 use tokio::net::{
@@ -32,10 +26,12 @@ use tungstenite::{
 mod othello;
 mod protocol;
 mod runner;
+mod handlers;
 use crate::protocol::*;
+use handlers::PeerMap;
 
-async fn accept_connection(room_map: RoomMap, addr: SocketAddr, stream: TcpStream) {
-    if let Err(e) = handle_connection(room_map, addr, stream).await {
+async fn accept_connection(room_map: RoomMap, peer_map: PeerMap, addr: SocketAddr, stream: TcpStream) {
+    if let Err(e) = handle_connection(room_map, peer_map, addr, stream).await {
         match e {
             Error::ConnectionClosed | Error::AlreadyClosed => (),
             err => error!("Error processing connection: {:?}", err),
@@ -43,7 +39,7 @@ async fn accept_connection(room_map: RoomMap, addr: SocketAddr, stream: TcpStrea
     }
 }
 
-async fn handle_connection(room_map: RoomMap, addr: SocketAddr, stream: TcpStream) -> WSResult<()> {
+async fn handle_connection(room_map: RoomMap, peer_map: PeerMap, addr: SocketAddr, stream: TcpStream) -> WSResult<()> {
     let mut request_type: Option<ClientRequest> = None;
 
     let ws_stream = accept_hdr_async(
@@ -70,19 +66,20 @@ async fn handle_connection(room_map: RoomMap, addr: SocketAddr, stream: TcpStrea
 
     match request_type {
         Some(ClientRequest::Play(prq)) => {
-            protocol::actions::play(prq, room_map, ws_stream)
+            handlers::play(prq, room_map, peer_map, ws_stream).await
         },
         Some(ClientRequest::Watch(wrq)) => {
-            protocol::actions::watch(wrq, room_map, ws_stream)
+            handlers::watch(wrq, room_map, peer_map, ws_stream).await
         },
         Some(ClientRequest::List(lrq)) => {
-            protocol::actions::list(lrq, room_map, ws_stream)
+            handlers::list(lrq, room_map, ws_stream).await
         },
         None => {
             // TODO: error somehow b/c this shouldn't be possible
-            Err(Error::Protocol("Something went wrong; failed to parse request type but fell through anyways"))
+            Err(Error::Protocol(std::borrow::Cow::from("Something went wrong; failed to parse request type but fell through anyways")))
         }
     }
+/*
     let data = ConnectionData {
         addr: addr,
         tx: tx.clone()
@@ -141,7 +138,7 @@ async fn handle_connection(room_map: RoomMap, addr: SocketAddr, stream: TcpStrea
     // Remove id from map b/c it is no longer valid
     cleanup_room(&my_id, &room_map);
     peer_map.lock().unwrap().remove(&my_id);
-    Ok(())
+*/
 }
 
 fn unwrap_incomming_message(msg: WSMessage) -> WSResult<ClientMessage> {
@@ -158,8 +155,8 @@ fn unwrap_incomming_message(msg: WSMessage) -> WSResult<ClientMessage> {
 async fn main() {
     simple_logger::init_with_level(log::Level::Debug).unwrap();
 
-    let context = PeerMap::new(Mutex::new(HashMap::new()));
-    let rooms = RoomMap::new(Mutex::new(HashMap::new()));
+    let watchers = PeerMap::new(Mutex::new(HashMap::new()));
+    let players = RoomMap::new(Mutex::new(HashMap::new()));
 
     let addr = env::args()
         .nth(1)
@@ -173,6 +170,6 @@ async fn main() {
             .expect("connected streams should have a peer address");
         info!("Peer address: {}", peer);
 
-        tokio::spawn(accept_connection(context.clone(), rooms.clone(), peer, stream));
+        tokio::spawn(accept_connection(players.clone(), watchers.clone(), peer, stream));
     }
 }

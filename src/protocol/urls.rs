@@ -1,5 +1,4 @@
 use crate::protocol::{
-    Id,
     ClientRequest,
     PlayRequest, WatchRequest, ListRequest,
 };
