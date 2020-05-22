@@ -5,6 +5,7 @@ use std::fs::canonicalize;
 
 // TODO: read this in from a toml file/command line arg or something
 pub const OTHELLO_ROOT : &str = "../othello_tourney/";
+pub const HUMAN_PLAYER : &str = "Yourself";
 
 pub fn build_unjailed_command<S: AsRef<OsStr>>(ai_name: S) -> Result<Command, tokio::io::Error> {
     let canonical_root = canonicalize(OTHELLO_ROOT)?;

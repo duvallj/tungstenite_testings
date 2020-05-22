@@ -10,7 +10,7 @@ use tokio::io::{
 use tokio::stream::StreamExt;
 
 pub mod structs;
-mod settings;
+pub mod settings;
 // Re-export structs
 pub use structs::*;
 
@@ -71,6 +71,7 @@ pub async fn get_move(runner: &mut Runner, board: &BoardStruct, player: &Player,
             let reply = reply.unwrap();
             let square : Result<usize, SerdeError> = serde_json::from_str(&reply);
             if let Err(why) = square {
+                // Read from stderr, but somehow also know when it ends?
                 return Err(why.into());
             }
             let square : usize = square.unwrap();

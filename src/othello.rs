@@ -120,6 +120,14 @@ Piece::OUTER, Piece::OUTER, Piece::OUTER, Piece::OUTER, Piece::OUTER, Piece::OUT
 pub struct BoardStruct {
     board: Board,
 }
+
+impl BoardStruct {
+    pub fn new() -> Self {
+        BoardStruct {
+            board: INITIAL_BOARD.clone(),
+        }
+    }
+}
 // whyy
 impl std::fmt::Debug for BoardStruct {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -128,5 +136,5 @@ impl std::fmt::Debug for BoardStruct {
 }
 
 mod serialization;
-mod moves;
+pub mod moves;
 mod conversions;

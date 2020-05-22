@@ -28,7 +28,7 @@ pub struct ExternalRoom {
     timelimit: f32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ServerMessage {
     #[serde(rename = "list_reply")]
@@ -47,10 +47,10 @@ pub enum ServerMessage {
 
 // fiiine, we'll make these struct fields public
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PlayRequest {black: String, white: String, t: f32}
+pub struct PlayRequest {pub black: String, pub white: String, pub t: f32}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WatchRequest {watching: Id}
+pub struct WatchRequest {pub watching: Id}
 
 // TODO: potentially have optional fields on this, make into another enum?
 #[derive(Clone, Debug, Serialize, Deserialize)]

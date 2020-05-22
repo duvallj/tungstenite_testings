@@ -3,6 +3,7 @@ use crate::othello::*;
 type Loc = usize;
 type Bd = BoardStruct;
 
+#[derive(Debug)]
 pub struct IllegalMoveError {
     player: Player,
     square: Loc,
@@ -129,6 +130,17 @@ pub fn score (player: &Player, board: &Bd) -> i32 {
             }
         })
         .fold(0, |acc, x| acc + x)
+}
+
+pub fn winner (board: &Bd) -> Player {
+    let diff_black = score(&Player::Black, board);
+    if diff_black > 0 {
+        Player::Black
+    } else if diff_black < 0 {
+        Player::White
+    } else {
+        Player::Unknown
+    }
 }
 
 pub fn is_game_over(player: &Player, board: &Bd) -> bool {
