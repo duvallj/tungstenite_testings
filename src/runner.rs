@@ -45,9 +45,13 @@ pub fn make_runner(ai_name: &String) -> IOResult<Runner> {
 }
 
 fn serialize_request(board: &BoardStruct, player: &Player, timelimit: f32, ai_name: &String) -> Result<String, SerdeError> {
-    let board_str = serde_json::to_string(board)?;
-    let player_str = serde_json::to_string(player)?;
+    let mut board_str = serde_json::to_string(board)?;
+    let mut player_str = serde_json::to_string(player)?;
     let timelimit_str = serde_json::to_string(&timelimit)?;
+    
+    // Remove quotes added by serde
+    board_str.retain(|c| c != '"');
+    player_str.retain(|c| c != '"');
 
     // This is the format that the JailedRunner python code expects
     let to_send = format!("{}\n{}\n{}\n{}\n", ai_name, timelimit_str, player_str, board_str);
@@ -68,7 +72,8 @@ pub async fn get_move(runner: &mut Runner, board: &BoardStruct, player: &Player,
     // TODO: add some way to time out this await in case the JailedRunner hangs for whatever reason
     match runner.stdout.next().await {
         Some(reply) => {
-            let reply = reply.unwrap();
+            let reply = reply?;
+            log::debug!("Got line \"{}\" from subprocess", &reply);
             let square : Result<usize, SerdeError> = serde_json::from_str(&reply);
             if let Err(why) = square {
                 // Read from stderr, but somehow also know when it ends?

@@ -68,6 +68,7 @@ fn make_flips(square: &Loc, player: &Player, board: &mut Bd, direction: &Directi
     }
 }
 
+// FIXME: currently very broken! figure out why
 pub fn make_move(square: &Loc, player: &Player, board: &mut Bd) -> Result<(), IllegalMoveError> {
     if !is_legal(square, player, board) {
         return Err(IllegalMoveError {

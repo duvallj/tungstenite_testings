@@ -214,13 +214,16 @@ pub async fn play<T: Sink<WSMessage, Error=WSError> + SinkExt<WSMessage> + Strea
             },
             p => {
                 debug!("{} Ticking game", &my_id);
+                // TODO: if our receiver gets cut off mid-tick (check w/ a select future),
+                // then we should quit immediately w/o sending a "game_end" message
                 let opt_player = tick_game(&mut board, *p, timelimit, &mut black, &mut white).await?;
                 if opt_player.is_none() {
+                    // Game is over
                     break;
                 } else {
                     player = opt_player.unwrap();
                 }
-                // that's a lot of data cloning...
+                // that's a lot of data cloning... ah well
                 let msg = 
                     ServerMessage::BoardUpdate {
                         board: board.clone(),
