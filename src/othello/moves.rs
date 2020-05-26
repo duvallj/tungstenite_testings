@@ -53,7 +53,7 @@ pub fn is_legal(square: &Loc, player: &Player, board: &Bd) -> bool {
 
 fn make_flips(square: &Loc, player: &Player, board: &mut Bd, direction: &Direction) -> () {
     let bracket = find_bracket(square, player, board, direction);
-    let mut board = board.board;
+    let mut bd = board.board;
     let dir = direction.value();
 
     match bracket {
@@ -61,14 +61,14 @@ fn make_flips(square: &Loc, player: &Player, board: &mut Bd, direction: &Directi
         Some(endpoint) => {
             let mut flipping = add(square.clone(), dir);
             while flipping != endpoint {
-                board[flipping] = player.into();
+                bd[flipping] = player.into();
                 flipping = add(flipping, dir);
             }
+            board.board = bd;
         }
     }
 }
 
-// FIXME: currently very broken! figure out why
 pub fn make_move(square: &Loc, player: &Player, board: &mut Bd) -> Result<(), IllegalMoveError> {
     if !is_legal(square, player, board) {
         return Err(IllegalMoveError {

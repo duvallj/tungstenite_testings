@@ -11,7 +11,7 @@ use tokio::io::{
 
 pub type RunnerStdin = ChildStdin;
 pub type RunnerStdout = Lines<BufReader<ChildStdout>>;
-pub type RunnerStderr = Lines<BufReader<ChildStderr>>;
+pub type RunnerStderr = BufReader<ChildStderr>;
 
 pub struct Runner {
     pub child: Child,

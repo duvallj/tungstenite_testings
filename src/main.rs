@@ -81,16 +81,6 @@ async fn handle_connection(room_map: RoomMap, peer_map: PeerMap, addr: SocketAdd
     }
 }
 
-fn unwrap_incomming_message(msg: WSMessage) -> WSResult<ClientMessage> {
-    let text = msg.to_text()?;
-    let parsed: Result<ClientMessage, SerdeError> = serde_json::from_str(text);
-    match parsed {
-        Ok(client_msg) => Ok(client_msg),
-        Err(error) => Err(WSError::Io(error.into())),
-    }
-}
-
-
 #[tokio::main]
 async fn main() {
     simple_logger::init_with_level(log::Level::Debug).unwrap();
@@ -100,7 +90,7 @@ async fn main() {
 
     let addr = env::args()
         .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:8080".to_string());
+        .unwrap_or_else(|| "127.0.0.1:10771".to_string());
     let mut listener = TcpListener::bind(&addr).await.expect("Can't listen");
     info!("Listening on: {}", addr);
 

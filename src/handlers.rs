@@ -1,4 +1,7 @@
 // Functions that actually handle the protocol
+use serde_json::{
+    error::Error as SerdeError
+};
 use std::collections::HashMap;
 use std::io::{
     Error as IOError,
@@ -7,6 +10,7 @@ use std::io::{
 use std::sync::{Arc, Mutex};
 use futures_channel::mpsc::{unbounded, UnboundedSender};
 use futures_util::{
+    pin_mut,
     sink::Sink,
     stream::Stream,
     SinkExt,
@@ -192,38 +196,107 @@ pub async fn play<T: Sink<WSMessage, Error=WSError> + SinkExt<WSMessage> + Strea
     let mut black = make_player(&black_name)?; 
     debug!("{} Making white player {}", &my_id, &white_name);
     let mut white = make_player(&white_name)?;
-    let timelimit = prq.t;
-    
+    let timelimit = prq.t;   
+
     // room_map is for Ids that are currently playing games
     debug!("{} Inserting room into map", &my_id);
     room_map.lock().unwrap()
         .insert(my_id.clone(), prq.to_room(&my_id));
     // peer_map is for Ids that are watching and expect to receive and mirror messages
     // As we are playing, we don't insert ourselves into it
-
-    let mut ws_fut = ws_receiver.next();
  
     let mut board = BoardStruct::new();
     let mut player = Player::Black;
 
-    loop {
-        match &player {
+    // Closures don't work b/c Rust is """safe"""
+    // aSyNc ClOsUrEs ArE uNsTaBlE
+    let msg = 
+        ServerMessage::BoardUpdate {
+            // Initial board message to let client know we have started running
+            board: board.clone(),
+            tomove: player.clone(),
+            black: black_name.clone(),
+            white: white_name.clone()
+        };
+    debug!("{} Sending {:?}", &my_id, &msg);
+    send_peer_message(&my_id, &room_map, &peer_map, msg.clone())?;
+    send_ws_message(&mut ws_sender, msg).await?;
+
+    // named lifetimes wowee getting fancy are we? (for the named break statements)
+    'main: loop {
+        match player {
             Player::Unknown => {
-                cleanup_room(&my_id, &room_map);
+                cleanup(&my_id, &room_map, &mut black, &mut white)?;
                 return Err(WSError::Io(IOError::new(IOErrorKind::InvalidData, format!("Encountered unknown player during game {}", &my_id).as_str())));
             },
             p => {
                 debug!("{} Ticking game", &my_id);
-                // TODO: if our receiver gets cut off mid-tick (check w/ a select future),
-                // then we should quit immediately w/o sending a "game_end" message
-                let opt_player = tick_game(&mut board, *p, timelimit, &mut black, &mut white).await?;
-                if opt_player.is_none() {
-                    // Game is over
-                    break;
-                } else {
-                    player = opt_player.unwrap();
-                }
-                // that's a lot of data cloning... ah well
+                
+                // if our receiver gets cut off mid-tick, then we should quit 
+                // immediately w/o sending a "game_end" message. This very
+                // convoluted loop checks for all that
+                {
+                    // Making new block to let pin_mut not affect other borrows 
+                    let mut tick_fut = tick_game(&mut board, p, timelimit, &mut black, &mut white);
+                    pin_mut!(tick_fut); // black magic right here. Delete this to see a very confusing error
+                    let mut ws_fut = ws_receiver.next();
+                    
+                    'check: loop {
+                        match select(tick_fut, ws_fut).await {
+                            Either::Left((tick_res, ws_fut_continue)) => {
+                                ws_fut = ws_fut_continue;
+                                match tick_res {
+                                    Ok(Some(new_player)) => {
+                                        debug!("{} updating player", &my_id);
+                                        player = new_player;
+                                        break 'check;
+                                    },
+                                    Ok(None) => {
+                                        // Game is over
+                                        break 'main;
+                                    },
+                                    Err(why) => {
+                                        // TODO: attempt to send a GameError back first
+                                        cleanup(&my_id, &room_map, &mut black, &mut white)?;
+                                        return Err(WSError::Io(why));
+                                    },
+                                }
+
+                            },
+                            Either::Right((ws_res, tick_fut_continue)) => {
+                                tick_fut = tick_fut_continue;
+                                match ws_res {
+                                    Some(Ok(WSMessage::Close(_))) => {
+                                        cleanup(&my_id, &room_map, &mut black, &mut white)?;
+                                        // TODO: decide if we actually want to error
+                                        // here instead. Prob not
+                                        return Ok(());
+                                    },
+                                    Some(Ok(_)) => {
+                                        // Ignore any other message type 
+                                        ws_fut = ws_receiver.next();
+                                    },
+                                    Some(Err(why)) => {
+                                        // TODO: here as well, attempt to send GameError
+                                        cleanup(&my_id, &room_map, &mut black, &mut white)?;
+                                        return Err(why);
+                                    },
+                                    None => {
+                                        // websocket stream has ended w/o close message?
+                                        // end game as normal ig
+                                        cleanup(&my_id, &room_map, &mut black, &mut white)?;
+                                        return Ok(());
+                                    },
+                                }
+                            }
+                        }
+                    }
+                } // end block where futures magic happens
+
+                // If we successfully get here, that means we know the game
+                // has been ticked and the player updated
+                
+                // That's a lot of clones... ah well
                 let msg = 
                     ServerMessage::BoardUpdate {
                         board: board.clone(),
@@ -247,6 +320,8 @@ pub async fn play<T: Sink<WSMessage, Error=WSError> + SinkExt<WSMessage> + Strea
         }
     ).await?;
 
+    // almost forgot to clean up here :P
+    cleanup(&my_id, &room_map, &mut black, &mut white)?;
     Ok(())
 }
 
@@ -272,6 +347,8 @@ pub async fn watch<T: Sink<WSMessage, Error=WSError> + SinkExt<WSMessage> + Stre
             },
         };
     }
+
+    // TODO: actually start listening for incomming messages and re-sending them
     Ok(())
 }
 
@@ -295,28 +372,48 @@ pub async fn list<T: Sink<WSMessage, Error=WSError> + SinkExt<WSMessage> + Strea
     // websocket is closed as soon as our handler finishes, nice!
 }
 
-pub async fn handle_initial_request<T: SinkExt<WSMessage> + std::marker::Unpin>(
+fn cleanup_room(
     id: &Id,
     room_map: &RoomMap,
-    ws_sender: &mut T,
-    request: &Option<ClientRequest>,
-) {
-    match request {
-        Some(ClientRequest::List(lrq)) => {
-        },
-        Some(ClientRequest::Play(prq)) => {
-        },
-        Some(ClientRequest::Watch(wrq)) => {
+) -> () {
+    room_map.lock().unwrap().remove(id); 
+}
+
+fn cleanup_runner(
+    runner: &mut Runner
+) -> WSResult<()> {
+    match runner.child.kill() {
+        Ok(()) => Ok(()),
+        Err(why) => {
+            return Err(WSError::Io(why));
         }
-        _ => {}
     }
 }
 
-pub fn cleanup_room(
+fn cleanup(
     id: &Id,
     room_map: &RoomMap,
-) {
-   room_map.lock().unwrap().remove(id); 
-   // TODO: do any other tasks required to stop a running game if we are 
-   // removing an item
+    black: &mut PlayerType,
+    white: &mut PlayerType,
+) -> WSResult<()> {
+    debug!("{} cleaning up room...", id);
+    
+    cleanup_room(id, room_map);
+    if let PlayerType::Ai(black_ai) = black {
+        cleanup_runner(black_ai)?;
+    }
+    if let PlayerType::Ai(white_ai) = white {
+        cleanup_runner(white_ai)?;
+    }
+
+    Ok(())
+}
+
+fn unwrap_incomming_message(msg: WSMessage) -> WSResult<ClientMessage> {
+    let text = msg.to_text()?;
+    let parsed: Result<ClientMessage, SerdeError> = serde_json::from_str(text);
+    match parsed {
+        Ok(client_msg) => Ok(client_msg),
+        Err(error) => Err(WSError::Io(error.into())),
+    }
 }
