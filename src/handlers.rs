@@ -41,6 +41,8 @@ use crate::othello::{
     moves::*,
 };
 
+const SEND_TIMEOUT : u64 = 10; // Number of seconds to wait before treating send to client as a failure
+
 type Tx = UnboundedSender<ServerMessage>;
 pub type PeerMap = Arc<Mutex<HashMap<Id, Tx>>>;
 
@@ -144,33 +146,102 @@ fn make_player(name: &String) -> WSResult<PlayerType> {
     Ok(PlayerType::Ai(runner.unwrap()))
 }
 
-async fn get_move(board: &BoardStruct, player: &Player, timelimit: f32, how: &mut PlayerType) -> Result<usize, IOError> {
+async fn get_move<T: Sink<WSMessage, Error=WSError> + SinkExt<WSMessage> + Unpin>(
+    board: &BoardStruct,
+    player: &Player,
+    timelimit: f32,
+    how: &mut PlayerType,
+    ws_sender: &mut T,
+) -> WSResult<usize> {
     match how {
-        PlayerType::Human => Err(IOError::new(IOErrorKind::AddrNotAvailable, "Playing as human not implemented!")),
-        PlayerType::Ai(r) => runner::get_move(r, board, player, timelimit).await,
+        PlayerType::Human => Err(WSError::Io(IOError::new(IOErrorKind::AddrNotAvailable, "Playing as human not implemented!"))),
+        PlayerType::Ai(r) => {
+            match runner::get_move(r, board, player, timelimit).await {
+                Ok(res) => Ok(res),
+                Err(why) => Err(WSError::Io(why)),
+            }
+        }
     }
 }
 
-async fn tick_game(board: &mut BoardStruct, player: Player, timelimit: f32, black: &mut PlayerType, white: &mut PlayerType) -> Result<Option<Player>, IOError> {
+async fn tick_game<T: Sink<WSMessage, Error=WSError> + SinkExt<WSMessage> + Unpin>(
+    board: &mut BoardStruct,
+    player: Player,
+    timelimit: f32,
+    black: &mut PlayerType,
+    white: &mut PlayerType,
+    ws_sender: &mut T,
+) -> WSResult<Option<Player>> {
     match player {
         Player::Unknown => Ok(Some(Player::Unknown)),
         Player::Black => {
             let p = Player::Black;
-            let square = get_move(board, &p, timelimit, black).await?;
+            let square = get_move(board, &p, timelimit, black, ws_sender).await?;
             if let Err(ill) = make_move(&square, &p, board) {
-                return Err(IOError::new(IOErrorKind::InvalidInput, format!("{:?}", ill).as_str()));
+                return Err(WSError::Io(IOError::new(IOErrorKind::InvalidInput, format!("{:?}", ill).as_str())));
             }
 
             Ok(next_player(board, &p))
         },
         Player::White => {
             let p = Player::White;
-            let square = get_move(board, &p, timelimit, white).await?;
+            let square = get_move(board, &p, timelimit, white, ws_sender).await?;
             if let Err(ill) = make_move(&square, &p, board) {
-                return Err(IOError::new(IOErrorKind::InvalidInput, format!("{:?}", ill).as_str()));
+                return Err(WSError::Io(IOError::new(IOErrorKind::InvalidInput, format!("{:?}", ill).as_str())));
             }
 
             Ok(next_player(board, &p))
+        }
+    }
+}
+
+async fn tick_game_with_timeout<R: Stream<Item=WSResult<WSMessage>> + StreamExt<Item=WSResult<WSMessage>> + Unpin, T: Sink<WSMessage, Error=WSError> + SinkExt<WSMessage> + Unpin>(
+    board: &mut BoardStruct,
+    player: Player,
+    timelimit: f32,
+    black: &mut PlayerType,
+    white: &mut PlayerType,
+    ws_sender: &mut T,
+    ws_receiver: &mut R,
+) -> WSResult<Option<Player>> {
+    
+    let mut tick_fut = tick_game(board, player, timelimit, black, white, ws_sender);
+    pin_mut!(tick_fut); // black magic right here. Delete this to see a very confusing error
+    let mut ws_fut = ws_receiver.next();
+    
+    loop {
+        match select(tick_fut, ws_fut).await {
+            Either::Left((tick_res, ws_fut_continue)) => {
+                ws_fut = ws_fut_continue;
+                debug!("Standard case");
+                return tick_res;
+            },
+            Either::Right((ws_res, tick_fut_continue)) => {
+                tick_fut = tick_fut_continue;
+                match ws_res {
+                    Some(Ok(WSMessage::Close(_))) => {
+                        // TODO: decide if we actually want to error
+                        // here instead of just ending the game. Prob not
+                        debug!("Normal error case");
+                        return Err(WSError::ConnectionClosed);
+                    },
+                    Some(Ok(_)) => {
+                        // Ignore any other message type 
+                        debug!("Ignore case");
+                        ws_fut = ws_receiver.next();
+                    },
+                    Some(Err(why)) => {
+                        debug!("Abnormal error case");
+                        return Err(why);
+                    },
+                    None => {
+                        // websocket stream has ended w/o close message?
+                        // end game as normal ig
+                        debug!("stupid werid error case");
+                        return Err(WSError::AlreadyClosed);
+                    },
+                }
+            }
         }
     }
 }
@@ -235,63 +306,30 @@ pub async fn play<T: Sink<WSMessage, Error=WSError> + SinkExt<WSMessage> + Strea
                 // if our receiver gets cut off mid-tick, then we should quit 
                 // immediately w/o sending a "game_end" message. This very
                 // convoluted loop checks for all that
-                {
-                    // Making new block to let pin_mut not affect other borrows 
-                    let mut tick_fut = tick_game(&mut board, p, timelimit, &mut black, &mut white);
-                    pin_mut!(tick_fut); // black magic right here. Delete this to see a very confusing error
-                    let mut ws_fut = ws_receiver.next();
-                    
-                    'check: loop {
-                        match select(tick_fut, ws_fut).await {
-                            Either::Left((tick_res, ws_fut_continue)) => {
-                                ws_fut = ws_fut_continue;
-                                match tick_res {
-                                    Ok(Some(new_player)) => {
-                                        debug!("{} updating player", &my_id);
-                                        player = new_player;
-                                        break 'check;
-                                    },
-                                    Ok(None) => {
-                                        // Game is over
-                                        break 'main;
-                                    },
-                                    Err(why) => {
-                                        // TODO: attempt to send a GameError back first
-                                        cleanup(&my_id, &room_map, &mut black, &mut white)?;
-                                        return Err(WSError::Io(why));
-                                    },
-                                }
+                // FIXME: currently, i don't know how to make it so that the
+                // black and white runners aren't twice borrowed, once in the tick game
+                // future and once in the cleanup when that doesn't fall through
 
-                            },
-                            Either::Right((ws_res, tick_fut_continue)) => {
-                                tick_fut = tick_fut_continue;
-                                match ws_res {
-                                    Some(Ok(WSMessage::Close(_))) => {
-                                        cleanup(&my_id, &room_map, &mut black, &mut white)?;
-                                        // TODO: decide if we actually want to error
-                                        // here instead. Prob not
-                                        return Ok(());
-                                    },
-                                    Some(Ok(_)) => {
-                                        // Ignore any other message type 
-                                        ws_fut = ws_receiver.next();
-                                    },
-                                    Some(Err(why)) => {
-                                        // TODO: here as well, attempt to send GameError
-                                        cleanup(&my_id, &room_map, &mut black, &mut white)?;
-                                        return Err(why);
-                                    },
-                                    None => {
-                                        // websocket stream has ended w/o close message?
-                                        // end game as normal ig
-                                        cleanup(&my_id, &room_map, &mut black, &mut white)?;
-                                        return Ok(());
-                                    },
-                                }
-                            }
-                        }
-                    }
-                } // end block where futures magic happens
+                match tick_game_with_timeout(
+                    &mut board, p, timelimit,
+                    &mut black,
+                    &mut white,
+                    &mut ws_sender,
+                    &mut ws_receiver
+                ).await {
+                    Ok(Some(new_player)) => {
+                        player = new_player;
+                    },
+                    Ok(None) => {
+                        break;
+                    },
+                    Err(why) => {
+                        // Potentially send GameError too
+                        cleanup(&my_id, &room_map, &mut black, &mut white)?;
+
+                        return Err(why);
+                    },
+                }
 
                 // If we successfully get here, that means we know the game
                 // has been ticked and the player updated
@@ -383,10 +421,11 @@ fn cleanup_runner(
     runner: &mut Runner
 ) -> WSResult<()> {
     match runner.child.kill() {
-        Ok(()) => Ok(()),
-        Err(why) => {
-            return Err(WSError::Io(why));
-        }
+        Ok(()) => {
+            debug!("Should've killed runner by now");
+            Ok(())
+        },
+        Err(why) => Err(WSError::Io(why))
     }
 }
 

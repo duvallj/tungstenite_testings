@@ -33,7 +33,8 @@ use handlers::PeerMap;
 async fn accept_connection(room_map: RoomMap, peer_map: PeerMap, addr: SocketAddr, stream: TcpStream) {
     if let Err(e) = handle_connection(room_map, peer_map, addr, stream).await {
         match e {
-            Error::ConnectionClosed | Error::AlreadyClosed => (),
+            // uncomment below line once done debugging
+            //Error::ConnectionClosed | Error::AlreadyClosed => (),
             err => error!("Error processing connection: {:?}", err),
         }
     }
