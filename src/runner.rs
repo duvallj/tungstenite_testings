@@ -1,3 +1,4 @@
+use log::*;
 use serde_json::error::{Error as SerdeError};
 use tokio::io::{
     AsyncBufReadExt,
@@ -99,10 +100,20 @@ pub async fn get_move(runner: &mut Runner, board: &BoardStruct, player: &Player,
 }
 
 pub async fn kill_and_get_error(mut runner: Runner) -> IOResult<String> {
+    info!("Attempting to stop process {}", runner.child.id());
+    // only sends a kill signal, doesn't actually wait on the process
+    debug!("Sending kill signal");
     runner.child.kill()?;
     // Can't use the wait_with_output command here because we have taken the
     // stream away from the child object.
     // So instead we just use an AsyncReadExt method ourselves
+
+    // First, close stdin so the process (even though it should be being killed???)
+    // doesn't wait on us
+    debug!("Manually dropping stdin");
+    drop(runner.stdin);
+
+    runner.child.await?;
     let mut error_output = String::new();
     runner.stderr.read_to_string(&mut error_output).await?;
 

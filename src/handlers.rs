@@ -297,7 +297,7 @@ pub async fn play<T: Sink<WSMessage, Error=WSError> + SinkExt<WSMessage> + Strea
     'main: loop {
         match player {
             Player::Unknown => {
-                cleanup(&my_id, &room_map, &mut black, &mut white)?;
+                cleanup(&my_id, &room_map, black, white).await?;
                 return Err(WSError::Io(IOError::new(IOErrorKind::InvalidData, format!("Encountered unknown player during game {}", &my_id).as_str())));
             },
             p => {
@@ -325,7 +325,7 @@ pub async fn play<T: Sink<WSMessage, Error=WSError> + SinkExt<WSMessage> + Strea
                     },
                     Err(why) => {
                         // Potentially send GameError too
-                        cleanup(&my_id, &room_map, &mut black, &mut white)?;
+                        cleanup(&my_id, &room_map, black, white).await?;
 
                         return Err(why);
                     },
@@ -359,7 +359,7 @@ pub async fn play<T: Sink<WSMessage, Error=WSError> + SinkExt<WSMessage> + Strea
     ).await?;
 
     // almost forgot to clean up here :P
-    cleanup(&my_id, &room_map, &mut black, &mut white)?;
+    cleanup(&my_id, &room_map, black, white).await?;
     Ok(())
 }
 
@@ -417,32 +417,36 @@ fn cleanup_room(
     room_map.lock().unwrap().remove(id); 
 }
 
-fn cleanup_runner(
-    runner: &mut Runner
+async fn cleanup_runner(
+    mut runner: Runner
 ) -> WSResult<()> {
-    match runner.child.kill() {
-        Ok(()) => {
-            debug!("Should've killed runner by now");
+    match runner::kill_and_get_error(runner).await {
+        Ok(error_out) => {
+            info!("Leftover stderr: {}", error_out);
             Ok(())
         },
         Err(why) => Err(WSError::Io(why))
     }
 }
 
-fn cleanup(
+async fn cleanup(
     id: &Id,
     room_map: &RoomMap,
-    black: &mut PlayerType,
-    white: &mut PlayerType,
+    mut black: PlayerType,
+    mut white: PlayerType,
 ) -> WSResult<()> {
     debug!("{} cleaning up room...", id);
     
     cleanup_room(id, room_map);
     if let PlayerType::Ai(black_ai) = black {
-        cleanup_runner(black_ai)?;
+        debug!("Cleaning up black runner...");
+        cleanup_runner(black_ai).await?;
+        debug!("Done w/ black!");
     }
     if let PlayerType::Ai(white_ai) = white {
-        cleanup_runner(white_ai)?;
+        debug!("Cleaning up white runner...");
+        cleanup_runner(white_ai).await?;
+        debug!("Done w/ white!");
     }
 
     Ok(())
