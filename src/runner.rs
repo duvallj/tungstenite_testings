@@ -57,7 +57,7 @@ fn serialize_request(board: &BoardStruct, player: &Player, timelimit: f32, ai_na
     player_str.retain(|c| c != '"');
 
     // This is the format that the JailedRunner python code expects
-    let to_send = format!("{}\n{}\n{}\n{}\n", ai_name, timelimit_str, player_str, board_str);
+    let to_send = format!("get_move\n{}\n{}\n{}\n{}\n", ai_name, timelimit_str, player_str, board_str);
 
     Ok(to_send)
 }
@@ -100,20 +100,23 @@ pub async fn get_move(runner: &mut Runner, board: &BoardStruct, player: &Player,
 }
 
 pub async fn kill_and_get_error(mut runner: Runner) -> IOResult<String> {
-    info!("Attempting to stop process {}", runner.child.id());
-    // only sends a kill signal, doesn't actually wait on the process
-    debug!("Sending kill signal");
-    runner.child.kill()?;
     // Can't use the wait_with_output command here because we have taken the
     // stream away from the child object.
     // So instead we just use an AsyncReadExt method ourselves
+    
+    info!("Attempting to stop process {}", runner.child.id());
+    // First, send special command to process telling it to stop
+    runner.stdin.write_all(b"stop\n").await?;
 
-    // First, close stdin so the process (even though it should be being killed???)
-    // doesn't wait on us
+    // Then, close stdin so the process
+    // If it tries to read again, should error out and quit anyway
     debug!("Manually dropping stdin");
     drop(runner.stdin);
 
+    // Wait for child process to terminate. Equivalent to `.join()` in python
     runner.child.await?;
+
+    // Read all stderr, return it
     let mut error_output = String::new();
     runner.stderr.read_to_string(&mut error_output).await?;
 
