@@ -21,9 +21,9 @@ pub fn build_unjailed_command<S: AsRef<OsStr>>(ai_name: S) -> Result<Command, to
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())
         .stdin(Stdio::piped())
-        .current_dir(canonical_root);
+        .current_dir(canonical_root)
+        .kill_on_drop(true);
 
-// no kill_on_drop b/c that might set daemon???
     Ok(cmd)
 }
 
